@@ -2,8 +2,9 @@ const express=require('express')
 const app=express();
 const cors =require('cors');
 const  jwt = require('jsonwebtoken');
-const stripe=require('stripe')(process.env.PAYMENT_SECRET_KEY)
+
 require('dotenv').config();
+const stripe=require('stripe')(process.env.PAYMENT_SECRET_KEY)
 const port=process.env.PORT||5000;
 
 //middleware
@@ -52,12 +53,13 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    
 
    const usersCollection=client.db("bistroDb").collection("users")
    const menuCollection=client.db("bistroDb").collection("menucollection")
    const reviewCollection=client.db("bistroDb").collection("reviews")
    const cartCollection=client.db("bistroDb").collection("carts")
+   const paymentCollection=client.db("bistroDb").collection("Payments")
    
 
    app.post('/jwt',(req,res)=>{
@@ -131,8 +133,32 @@ async function run() {
     const result=await cartCollection.deleteOne(query)
     res.send(result)
   })
+  // payment 
+  app.post('/create-payment-intent',varifyJWT,async(req,res)=>{
+    const {price}=req.body;
+    const amount=price*100;
+    //stripe pyment used cent so multiply with 100
+    const paymentIntent=await stripe.paymentIntents.create({
+      amount:amount,
+      currency:'usd',
+      payment_method_types:['card']
+    });
+    res.send({
+      clientSecret:paymentIntent.client_secret
+    })
+    
+  })
 
-  //cart api
+  app.post('/payments',varifyJWT,async(req,res)=>{
+    const payment=req.body;
+    const insertResult =await paymentCollection.insertOne(payment);
+    const query = { _id: { $in: payment.items.map(id => new ObjectId(id)) } }
+    const deleteResult = await cartCollection.deleteMany(query)
+    res.send({ insertResult, deleteResult });
+
+  })
+
+ 
   app.post('/users',async(req,res)=>{
     const user=req.body;
     const query={email:user.email};
@@ -173,6 +199,21 @@ async function run() {
     const user = await usersCollection.findOne(query);
     const result = { admin: user?.role === 'admin' }
     res.send(result);
+  })
+  // dashboard
+  app.get('/admin-stats',varifyJWT,verifyAdmin,async(req,res)=>{
+    const users=await usersCollection.estimatedDocumentCount();
+    const products=await menuCollection.estimatedDocumentCount();
+    const orders=await paymentCollection.estimatedDocumentCount();
+    // best way to get sum of a feild is to use group and sum operator 
+    const payments=await paymentCollection.find().toArray();
+    const revenue=payments.reduce((sum,payment)=>sum+payment.price,0)
+    res.send({
+      revenue,
+      users,
+      products,
+      orders
+    })
   })
 
 
